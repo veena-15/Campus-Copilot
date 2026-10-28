@@ -11,17 +11,21 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from dotenv import dotenv_values
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 from supabase import Client, create_client
 
-for env_file in (Path(__file__).parent.parent / ".env.local", Path(__file__).with_name(".env")):
-    for name, value in dotenv_values(env_file).items():
-        if value:
-            os.environ[name] = value
+# Local convenience only. Vercel settings are injected as process environment
+# variables and must always take precedence over any dotenv file.
+if os.getenv("VERCEL") != "1":
+    from dotenv import dotenv_values
+
+    for env_file in (Path(__file__).with_name(".env"), Path(__file__).parent.parent / ".env.local"):
+        for name, value in dotenv_values(env_file).items():
+            if value:
+                os.environ.setdefault(name, value)
 
 app = FastAPI(title="Campus Copilot API", version="1.0.0")
 origins = [origin.strip() for origin in os.getenv("BACKEND_CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
@@ -38,7 +42,7 @@ def supabase_settings() -> tuple[str, str]:
     url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
     key = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
     if not url or not key:
-        raise HTTPException(status_code=503, detail="Supabase is not configured for the backend. Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in backend/.env.")
+        raise HTTPException(status_code=503, detail="Supabase is not configured for the backend. Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in the backend environment.")
     return url.rstrip("/"), key
 
 
@@ -154,7 +158,7 @@ async def save_workspace(workspace: Workspace, auth: tuple[str, str, str, str] =
 def navigate_settings() -> tuple[str, str, str]:
     url, key, model = (os.getenv(name, "").strip() for name in ("NAVIGATE_API_URL", "NAVIGATE_API_KEY", "NAVIGATE_MODEL"))
     if not url or not key or not model:
-        raise HTTPException(status_code=503, detail="AI is not configured. Set NAVIGATE_API_URL, NAVIGATE_API_KEY, and NAVIGATE_MODEL in backend/.env.")
+        raise HTTPException(status_code=503, detail="AI is not configured. Set NAVIGATE_API_URL, NAVIGATE_API_KEY, and NAVIGATE_MODEL in the backend environment.")
     if not url.startswith("https://") and not any(host in url for host in ("localhost", "127.0.0.1")):
         raise HTTPException(status_code=503, detail="NAVIGATE_API_URL must use HTTPS.")
     return url, key, model
@@ -244,9 +248,11 @@ async def plan(request: PlanRequest, _: tuple[str, str, str, str] = Depends(auth
 @app.post("/api/materials")
 async def extract_material(file: UploadFile = File(...), _: tuple[str, str, str, str] = Depends(authenticated_client)) -> dict[str, Any]:
     name = (file.filename or "study-material")[:200]
-    payload = await file.read(5 * 1024 * 1024 + 1)
-    if len(payload) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Files must be 5 MB or smaller.")
+    # Leave room for multipart headers under Vercel Functions' 4.5 MB body cap.
+    max_file_bytes = 3 * 1024 * 1024
+    payload = await file.read(max_file_bytes + 1)
+    if len(payload) > max_file_bytes:
+        raise HTTPException(status_code=413, detail="Files must be 3 MB or smaller.")
     try:
         if name.lower().endswith(".txt") or file.content_type == "text/plain":
             text = payload.decode("utf-8-sig")

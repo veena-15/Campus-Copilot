@@ -60,9 +60,31 @@ Use actual values from your accounts. Keep `.env.local` and `backend/.env` out o
 
 The browser uses Supabase Auth. FastAPI verifies each bearer token and queries with that same token, so Postgres Row Level Security scopes records to the signed-in user. The app does not use a service-role key. AI prompts, study plans, and material extraction are handled by FastAPI; Navigate Labs keys remain server-side in `backend/.env`.
 
-## Deployment
+## Deploy the backend to Vercel
 
-Deploy Next.js and FastAPI as separate services. Set `NEXT_PUBLIC_BACKEND_URL` to the deployed HTTPS API origin in the frontend's build environment. Set `BACKEND_CORS_ORIGINS` to the exact deployed frontend origin(s). Add Supabase and Navigate Labs settings to the backend's environment. Configure the Supabase Auth Site URL and redirect URLs for the deployed frontend, then apply `supabase/schema.sql` to the production project.
+The backend is a FastAPI application and can be deployed as its own Vercel project from this repository. Vercel detects `backend/main.py` as the FastAPI entry point when you set the project's Root Directory to `backend`; no Uvicorn start command or custom build command is needed. Uvicorn is only for local development.
+
+1. In Vercel, create a **New Project** and import this same Git repository.
+2. In project setup, set **Root Directory** to `backend`. Leave the framework/build settings on automatic detection; do not enter a start command.
+3. Add these environment variables to the backend project for **Production** (and Preview too, if you use preview deployments):
+
+   ```env
+   SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+   SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
+   NAVIGATE_API_URL=YOUR_PROVIDER_CHAT_COMPLETIONS_URL
+   NAVIGATE_API_KEY=YOUR_NAVIGATE_KEY
+   NAVIGATE_MODEL=YOUR_MODEL_NAME
+   BACKEND_CORS_ORIGINS=https://YOUR_DEPLOYED_FRONTEND_DOMAIN
+   ```
+
+   Use the full chat-completions URL supplied by Navigate Labs. Keep both provider and Supabase credentials in Vercel's backend environment settings; never add them to source code or a `NEXT_PUBLIC_` variable.
+4. Deploy. The backend's root URL `/health` should return a healthy status. Its API endpoints include `/api/workspace`, `/api/chat`, `/api/plan`, and `/api/materials`.
+5. Copy the backend deployment's HTTPS origin (for example, `https://your-backend.vercel.app`). In the **frontend Vercel project**, set `NEXT_PUBLIC_BACKEND_URL` to that origin for the relevant environments, then redeploy the frontend. Do not add a trailing path such as `/api` to this value.
+6. In Supabase Authentication settings, set the production frontend URL as the Site URL and add its sign-in callback URL to the allowed redirect URLs.
+
+The backend writes workspace data only to the Supabase PostgreSQL database, using the signed-in user's access token and the `student_workspaces` table's Row Level Security policy. The `data` column is PostgreSQL `jsonb`; there is no SQLite file or in-memory database. The current `supabase/schema.sql` is the database setup for this app. If you already ran it successfully in the same Supabase project, you do not need to run it again for this backend deployment.
+
+Vercel runs FastAPI as a function, not as a continuously running Uvicorn server. Uploaded PDF/TXT files are limited to 3 MB so the multipart request remains under Vercel Functions' 4.5 MB request-body cap.
 
 ## Project layout
 
